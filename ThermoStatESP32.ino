@@ -24,16 +24,18 @@ SOFTWARE.
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ILI9341.h>
-#include <Fonts/VeraSe60pt7b.h>
-#include <Fonts/VeraSe42pt7b.h>
-#include <Fonts/VeraSe18pt7b.h>
-#include <Fonts/VeraSe10pt7b.h>
+#include "fonts/VeraSe60pt7b.h"
+#include "fonts/VeraSe42pt7b.h
+#include "fonts/VeraSe18pt7b.h"
+#include "fonts/VeraSe10pt7b.h"
 #include <dragon.h>
 #include <WiFi.h>
 #include <SPI.h>
 #include <OneButton.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include "radhot.h"
+#include "radcold.h"
 
 //define TFT pins for use with ESP32
 #define TFT_DC 16   
@@ -41,12 +43,12 @@ SOFTWARE.
 #define TFT_RST 5
 
 //define button pins
-#define SWTU 35// switch up is at pin 3
-#define SWTD 34 // switch down is at pin 4
+#define SWTU 34// switch up is at pin 3
+#define SWTD 35 // switch down is at pin 4
 
 //WiFi AP details - fixed for now
-const char* ssid = "YourSID";
-const char* password = "YourPassword";
+const char* ssid = "";
+const char* password = "";
 
 //define DHT temp sensor pin
 #define ONE_WIRE_BUS 32
@@ -61,9 +63,7 @@ DallasTemperature sensors(&oneWire);
 #define F(string_literal) string_literal
 #endif
 
-int heatActive = 33; //define relay pin - initially LED for testing.
-
-
+#define heatActive 33 //define led status light
 
 //set millis and data collection interval variables.
 unsigned long previousMillis = 0;
@@ -105,22 +105,25 @@ void setup() {
 
   // begin Dallas sesnsor
   sensors.begin();
-  //sensors.setResolution(dallasAddress, 9);
 
-  tft.setRotation(3);  // 0 - Portrait, 1 - Lanscape
+  tft.setRotation(3);  // 0 - Portrait, 1 - Landscape
   tft.setTextWrap(true);
 
   bootSplash();
   delay(3000);
   
-  initialiseWifi();
-  delay(3000);
+  if(ssid != ""){
+    initialiseWifi();
+    delay(3000);
+  }else{
+    noWiFi();
+  }
   
   displayLayout();
   setPointTxt(setPoint, NULL);
   localTempTxt(localTemp, NULL);
 
-  pinMode(heatActive, OUTPUT);  // make led or pin3 an output
+  pinMode(heatActive, OUTPUT);  // set active LED pin as output
 
   buttonUp.attachClick(setPointUp);
   buttonDown.attachClick(setPointDown);
@@ -181,11 +184,13 @@ void checkTempStatus(int $i, int $g){
     {
       digitalWrite (heatActive, 1); // turn on the led
       localTempTxt($g, NULL);
+      setPointTxt($i, NULL);
     }
     else if ($g >= $i) // if not then set the font colour to WHITE and turn LED OFF
     {
       digitalWrite (heatActive, 0); //turn LED OFF.
       localTempTxt($g, NULL);
+      setPointTxt($i, NULL);
     }
 }
 
@@ -231,7 +236,7 @@ unsigned long displayLayout() {
   tft.print("C");
  
   }
-//function to updat the set point test on the display
+//function to update the set point test on the display
 //$i = setPoint, $h = trigger
 unsigned long setPointTxt(int $i, int $h){
   if($h == 1){
@@ -241,6 +246,7 @@ unsigned long setPointTxt(int $i, int $h){
 
   if($i <= localTemp){
     tft.setTextColor(ILI9341_BLUE);
+    tft.drawRGBBitmap(170, 190, radCold, 50, 50);
     //draw big green circle left.
     tft.drawCircle(70, 120, 120, ILI9341_GREEN);
     tft.drawCircle(70, 120, 119, ILI9341_GREEN);
@@ -254,17 +260,18 @@ unsigned long setPointTxt(int $i, int $h){
     tft.drawCircle(70, 120, 111, ILI9341_GREEN);
     }else{
       tft.setTextColor(ILI9341_RED);
+      tft.drawRGBBitmap(170, 190, radHot, 50, 50);
       //draw big green circle left.
-    tft.drawCircle(70, 120, 120, ILI9341_RED);
-    tft.drawCircle(70, 120, 119, ILI9341_RED);
-    tft.drawCircle(70, 120, 118, ILI9341_RED);
-    tft.drawCircle(70, 120, 117, ILI9341_RED);
-    tft.drawCircle(70, 120, 116, ILI9341_RED);
-    tft.drawCircle(70, 120, 115, ILI9341_RED);
-    tft.drawCircle(70, 120, 114, ILI9341_RED);
-    tft.drawCircle(70, 120, 113, ILI9341_RED);
-    tft.drawCircle(70, 120, 112, ILI9341_RED);
-    tft.drawCircle(70, 120, 111, ILI9341_RED);
+      tft.drawCircle(70, 120, 120, ILI9341_RED);
+      tft.drawCircle(70, 120, 119, ILI9341_RED);
+      tft.drawCircle(70, 120, 118, ILI9341_RED);
+      tft.drawCircle(70, 120, 117, ILI9341_RED);
+      tft.drawCircle(70, 120, 116, ILI9341_RED);
+      tft.drawCircle(70, 120, 115, ILI9341_RED);
+      tft.drawCircle(70, 120, 114, ILI9341_RED);
+      tft.drawCircle(70, 120, 113, ILI9341_RED);
+      tft.drawCircle(70, 120, 112, ILI9341_RED);
+      tft.drawCircle(70, 120, 111, ILI9341_RED);
       }
   
   tft.setFont(&VeraSe60pt7b);
@@ -274,7 +281,7 @@ unsigned long setPointTxt(int $i, int $h){
   tft.println($i);
   }
 //function to update local temp text
-//$i = localTemp, $h = either 1 or NULL, 1 if temperature has changed orr NULL of no change
+//$i = localTemp, $h = either 1 or NULL, 1 if temperature has changed or NULL of no change
 unsigned long localTempTxt(int $i, int $h){
   if ($h == 1){
   tft.fillRect(212, 28, 100, 67, ILI9341_BLACK);
@@ -313,7 +320,7 @@ unsigned long localTempTxt(int $i, int $h){
   tft.setCursor(210, 90);
   tft.println($i);  
   }
-
+//initial boot screen 
 unsigned long bootSplash() {
   tft.fillScreen(ILI9341_BLACK);
   unsigned long start = micros();
@@ -324,12 +331,13 @@ unsigned long bootSplash() {
   tft.printf(sVersion);
 
   tft.drawRGBBitmap(105, 85, dragonBitmap, DRAGON_WIDTH, DRAGON_HEIGHT);
+  //tft.drawRGBBitmap(0, 0, radCold, 50, 50);
+  //tft.drawRGBBitmap(0, 50, radHot, 50, 50);
   
   tft.setCursor(94, 180);
   tft.println("SiniTronics");
   return micros() - start;
 }
-
 //function to start wifi and connect to router
 void initialiseWifi() {
 
@@ -372,9 +380,18 @@ void initialiseWifi() {
   tft.setTextColor(ILI9341_GREEN);
   tft.println(WiFi.localIP());  
   }
+//No WiFi print text to screen
+void noWiFi(){
+  tft.fillScreen(ILI9341_BLACK);
+  tft.setCursor(10, 10);
+  tft.setTextColor(ILI9341_WHITE);
+  tft.println("WiFi not configured...");
+  tft.setCursor(10, 35);
+  tft.println("Skipping!");
+  delay(2000);
+}
 
 //Functions for button presses
-
 void setPointUp() {
       setPoint ++ ;  // add one to the setPoint, the setPoint is the ideal temperature for you
 }
