@@ -25,7 +25,7 @@ SOFTWARE.
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ILI9341.h>
 #include "fonts/VeraSe60pt7b.h"
-#include "fonts/VeraSe42pt7b.h
+#include "fonts/VeraSe42pt7b.h"
 #include "fonts/VeraSe18pt7b.h"
 #include "fonts/VeraSe10pt7b.h"
 #include <dragon.h>
