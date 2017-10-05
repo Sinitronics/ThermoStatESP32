@@ -24,19 +24,23 @@ SOFTWARE.
 
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ILI9341.h>
-#include "fonts/VeraSe60pt7b.h"
-#include "fonts/VeraSe42pt7b.h"
+#include "fonts/VeraSe24pt7b.h"
 #include "fonts/VeraSe18pt7b.h"
-#include "fonts/VeraSe10pt7b.h"
+#include "fonts/VeraSe30pt7b.h"
+#include "fonts/VeraSe7pt7b.h"
 #include <dragon.h>
 #include <WiFi.h>
 #include <SPI.h>
 #include <OneButton.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include "radhot.h"
-#include "radcold.h"
+#include "wifion.h"
+#include "wifioff.h"
+#include <NTPClient.h>
+#include <PubSubClient.h>
 
+//define network client 
+static WiFiClient network;
 //define TFT pins for use with ESP32
 #define TFT_DC 16   
 #define TFT_CS 15
@@ -47,16 +51,18 @@ SOFTWARE.
 #define SWTD 35 // switch down is at pin 4
 
 //WiFi AP details - fixed for now
-const char* ssid = "";
-const char* password = "";
+const char* ssid = "TheCity";
+const char* password = "P1xelcat";
 
-//define DHT temp sensor pin
+//define temp sensor pin
 #define ONE_WIRE_BUS 32
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
-
-//DeviceAddress dallasAddress;
+//register WiFiUDP
+WiFiUDP ntpUDP;
+//register NTPClient
+NTPClient timeClient(ntpUDP, "uk.pool.ntp.org", 3600);
 
 #if defined(__SAM3X8E__)
 #undef __FlashStringHelper::F(string_literal)
@@ -66,7 +72,9 @@ DallasTemperature sensors(&oneWire);
 #define heatActive 33 //define led status light
 
 //set millis and data collection interval variables.
+unsigned long currentMillis = millis();
 unsigned long previousMillis = 0;
+unsigned long prevMills = 0;
 uint32_t colData; 
 
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
@@ -80,10 +88,10 @@ float getLocTemp = 0;
 float localTemp = 0;
 int setPoint = 20;
 int setPointOld = 0;
+int currentStatus = 54321;
 
 //Sketch version
-
-char sVersion[] = "v0.01";
+char sVersion[] = "v0.02";
 
 void setup() {
 
@@ -92,7 +100,7 @@ void setup() {
   tft.begin();
 
   // read diagnostics (optional but can help debug problems)
-  uint8_t x = tft.readcommand8(ILI9341_RDMODE);
+/*  uint8_t x = tft.readcommand8(ILI9341_RDMODE);
   Serial.print("Display Power Mode: 0x"); Serial.println(x, HEX);
   x = tft.readcommand8(ILI9341_RDMADCTL);
   Serial.print("MADCTL Mode: 0x"); Serial.println(x, HEX);
@@ -102,7 +110,7 @@ void setup() {
   Serial.print("Image Format: 0x"); Serial.println(x, HEX);
   x = tft.readcommand8(ILI9341_RDSELFDIAG);
   Serial.print("Self Diagnostic: 0x"); Serial.println(x, HEX);
-
+*/
   // begin Dallas sesnsor
   sensors.begin();
 
@@ -110,16 +118,21 @@ void setup() {
   tft.setTextWrap(true);
 
   bootSplash();
-  delay(3000);
+  delay(500);
   
   if(ssid != ""){
     initialiseWifi();
     delay(3000);
+    timeClient.begin();
   }else{
     noWiFi();
   }
   
+  getTemp();
+  Serial.print("Temp: ");
+  Serial.println(localTemp);
   displayLayout();
+  heatingStatus(currentStatus);
   setPointTxt(setPoint, NULL);
   localTempTxt(localTemp, NULL);
 
@@ -130,23 +143,25 @@ void setup() {
 
   Serial.print("Firmware version: ");
   Serial.println(sVersion);
-
+  //Interval to collect data.
   colData = 1000;
-
 }
 
 void loop() {
-
+  
   buttonUp.tick();
   buttonDown.tick();
- 
-  unsigned long currentMillis = millis();
 
+  currentMillis = millis();
+ 
   if (currentMillis - previousMillis >= colData) {
     previousMillis = currentMillis;
+    timeClient.update();
     getTemp();
+    displayTime();
     updateDispTemp(localTemp, prevTemp);
     checkTempStatus(setPoint, localTemp);
+    checkWifiStatus();
   }
 
   //check set point value anf if change update display set point temp.
@@ -180,144 +195,130 @@ void updateDispTemp(int $i, int $g){
 //function to check set pont temp against local temp and update heating status accordingly. 
 //$i = setPoint, $g = localTemp
 void checkTempStatus(int $i, int $g){
-  if ($g < $i) // if the temperature exceeds your chosen setting set font colour to RED and turn LED ON
+  if ($g <= $i - 1) // if the temperature exceeds your chosen setting set font colour to RED and turn LED ON
     {
-      digitalWrite (heatActive, 1); // turn on the led
       localTempTxt($g, NULL);
       setPointTxt($i, NULL);
+      heatingStatus(1);
     }
-    else if ($g >= $i) // if not then set the font colour to WHITE and turn LED OFF
+    else if ($g >= $i + 1) // if not then set the font colour to WHITE and turn LED OFF
     {
+      localTempTxt($g, NULL);
+      setPointTxt($i, NULL);
+      heatingStatus(0);
+    }
+}
+
+void heatingStatus(int $i){
+  if(currentStatus != $i){
+    tft.fillRect(205, 25, 57, 31, ILI9341_DARKGREY);
+    if($i != 1){
+      tft.setTextColor(ILI9341_BLUE);
+      tft.setCursor(50, 53);
+      tft.setFont(&VeraSe18pt7b);
+      tft.print("Heating Off");
       digitalWrite (heatActive, 0); //turn LED OFF.
-      localTempTxt($g, NULL);
-      setPointTxt($i, NULL);
+      currentStatus = $i;
+    } else {
+      tft.setTextColor(ILI9341_GREEN);
+      tft.setCursor(50, 53);
+      tft.setFont(&VeraSe18pt7b);
+      tft.print("Heating On");
+      digitalWrite (heatActive, 1); // turn on the led
+      currentStatus = $i;
     }
+  }
+  //Check is startup set status to Off
+  if($i == 54321){
+    tft.setTextColor(ILI9341_BLUE);
+    tft.setCursor(50, 53);
+    tft.setFont(&VeraSe18pt7b);
+    tft.print("Heating Off");
+    digitalWrite (heatActive, 0); //turn LED OFF.
+    currentStatus = 0;
+  }
 }
 
 //function for display layout
 unsigned long displayLayout() {
   //set background to black
   tft.fillScreen(ILI9341_BLACK);
-  //draw big green circle left.
-//  tft.fillCircle(70, 120, 120, ILI9341_GREEN);
-//  tft.fillCircle(70, 120, 111, ILI9341_BLACK);
-  //draw green circle top right
-//  tft.fillCircle(300, 30, 120, ILI9341_GREEN);
-//  tft.fillCircle(300, 30, 111, ILI9341_BLACK);
-
-  tft.setCursor(5, 55);
-  tft.setFont(&VeraSe10pt7b);
-  tft.setTextSize(1);
+  //draw background boxes
+  
+  tft.fillRoundRect(5, 5, 310, 60, 5, 0x7BCF);      //status
+  tft.fillRoundRect(5, 70, 152, 80, 5, ILI9341_DARKGREY);     //Set point
+  tft.fillRoundRect(163, 70, 152, 80, 5, ILI9341_DARKGREY);   //temperature
+  tft.fillRoundRect(5, 155, 152, 80, 5, ILI9341_DARKGREY);    //time
+  tft.fillRoundRect(163, 155, 152, 80, 5, ILI9341_DARKGREY);  //others
+  
+  tft.setFont(&VeraSe7pt7b);
+  tft.setTextSize(0);
   tft.setTextWrap(true);
-  tft.setTextColor(ILI9341_MAGENTA);
+  tft.setTextColor(ILI9341_WHITE);
+  
+  tft.setCursor(10, 20);
+  tft.print("Status:");
+
+  tft.setCursor(10, 85);
   tft.print("Set Point: ");
 
-  tft.drawCircle(133, 85, 4, ILI9341_CYAN);
-  tft.setCursor(140,105);
-  tft.setFont(&VeraSe18pt7b);
-  tft.setTextSize(1);
-  tft.setTextWrap(true);
-  tft.setTextColor(ILI9341_CYAN);
-  tft.print("C");
-
-  tft.setCursor(200, 20);
-  tft.setFont(&VeraSe10pt7b);
-  tft.setTextSize(1);
-  tft.setTextWrap(true);
-  tft.setTextColor(ILI9341_MAGENTA);
+  tft.setCursor(169, 85);
   tft.print("Temp: ");
 
-  tft.drawCircle(275, 105, 4, ILI9341_CYAN);
-  tft.setCursor(282, 125);
+  tft.setCursor(10, 170);
+  tft.print("Time:");  
+
+  tft.drawCircle(114, 100, 4, ILI9341_CYAN);
+  tft.setCursor(120,120);
   tft.setFont(&VeraSe18pt7b);
   tft.setTextSize(1);
   tft.setTextWrap(true);
   tft.setTextColor(ILI9341_CYAN);
   tft.print("C");
- 
-  }
+
+  tft.drawCircle(275, 100, 4, ILI9341_CYAN);
+  tft.setCursor(282, 120);
+  tft.setFont(&VeraSe18pt7b);
+  tft.setTextSize(1);
+  tft.setTextWrap(true);
+  tft.setTextColor(ILI9341_CYAN);
+  tft.print("C");
+}
 //function to update the set point test on the display
 //$i = setPoint, $h = trigger
 unsigned long setPointTxt(int $i, int $h){
   if($h == 1){
-  //tft.fillRect(8, 101, 140, 95, ILI9341_BLACK);
-  tft.fillRoundRect(6, 101, 142, 95, 10, ILI9341_BLACK);
+  tft.fillRect(37, 95, 72, 48, ILI9341_DARKGREY);
   }
 
   if($i <= localTemp){
     tft.setTextColor(ILI9341_BLUE);
-    tft.drawRGBBitmap(170, 190, radCold, 50, 50);
-    //draw big green circle left.
-    tft.drawCircle(70, 120, 120, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 119, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 118, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 117, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 116, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 115, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 114, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 113, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 112, ILI9341_GREEN);
-    tft.drawCircle(70, 120, 111, ILI9341_GREEN);
+    //tft.drawRGBBitmap(170, 190, radCold, 50, 50);
     }else{
       tft.setTextColor(ILI9341_RED);
-      tft.drawRGBBitmap(170, 190, radHot, 50, 50);
-      //draw big green circle left.
-      tft.drawCircle(70, 120, 120, ILI9341_RED);
-      tft.drawCircle(70, 120, 119, ILI9341_RED);
-      tft.drawCircle(70, 120, 118, ILI9341_RED);
-      tft.drawCircle(70, 120, 117, ILI9341_RED);
-      tft.drawCircle(70, 120, 116, ILI9341_RED);
-      tft.drawCircle(70, 120, 115, ILI9341_RED);
-      tft.drawCircle(70, 120, 114, ILI9341_RED);
-      tft.drawCircle(70, 120, 113, ILI9341_RED);
-      tft.drawCircle(70, 120, 112, ILI9341_RED);
-      tft.drawCircle(70, 120, 111, ILI9341_RED);
+      //tft.drawRGBBitmap(170, 190, radHot, 50, 50);
       }
   
-  tft.setFont(&VeraSe60pt7b);
-  tft.setTextSize(1);
-  
-  tft.setCursor(3, 190);
+  tft.setFont(&VeraSe30pt7b);
+  tft.setCursor(35, 140);
   tft.println($i);
   }
 //function to update local temp text
 //$i = localTemp, $h = either 1 or NULL, 1 if temperature has changed or NULL of no change
 unsigned long localTempTxt(int $i, int $h){
   if ($h == 1){
-  tft.fillRect(212, 28, 100, 67, ILI9341_BLACK);
+    tft.fillRect(191, 95, 72, 48, ILI9341_DARKGREY);
   }
   //if heating is in off state circle is set to orange and text to orange
   //if heating is in on state circle is set to green and text to blue
   if($i < setPoint){
     tft.setTextColor(ILI9341_BLUE);
-    tft.drawCircle(300, 30, 120, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 119, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 118, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 117, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 116, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 115, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 114, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 113, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 112, ILI9341_GREEN);
-    tft.drawCircle(300, 30, 111, ILI9341_GREEN);
     }else{
       tft.setTextColor(0xFB40);
-      tft.drawCircle(300, 30, 120, 0xFB40);
-      tft.drawCircle(300, 30, 119, 0xFB40);
-      tft.drawCircle(300, 30, 118, 0xFB40);
-      tft.drawCircle(300, 30, 117, 0xFB40);
-      tft.drawCircle(300, 30, 116, 0xFB40);
-      tft.drawCircle(300, 30, 115, 0xFB40);
-      tft.drawCircle(300, 30, 114, 0xFB40);
-      tft.drawCircle(300, 30, 113, 0xFB40);
-      tft.drawCircle(300, 30, 112, 0xFB40);
-      tft.drawCircle(300, 30, 111, 0xFB40);
       }
   
-  tft.setFont(&VeraSe42pt7b);
-  tft.setTextSize(1);
-  
-  tft.setCursor(210, 90);
+  tft.setFont(&VeraSe30pt7b);
+  tft.setCursor(189, 140);
   tft.println($i);  
   }
 //initial boot screen 
@@ -331,8 +332,6 @@ unsigned long bootSplash() {
   tft.printf(sVersion);
 
   tft.drawRGBBitmap(105, 85, dragonBitmap, DRAGON_WIDTH, DRAGON_HEIGHT);
-  //tft.drawRGBBitmap(0, 0, radCold, 50, 50);
-  //tft.drawRGBBitmap(0, 50, radHot, 50, 50);
   
   tft.setCursor(94, 180);
   tft.println("SiniTronics");
@@ -360,11 +359,12 @@ void initialiseWifi() {
   tft.printf("Connecting.");
 
   while (WiFi.status() != WL_CONNECTED) {
+    tft.drawRGBBitmap(170, 35, wifiOff, WIFIOFF_WIDTH, WIFIOFF_HEIGHT);
     delay(500);
     Serial.print(".");
     tft.printf(".");
     }
-
+    tft.drawRGBBitmap(170, 35, wifiOn, WIFION_WIDTH, WIFION_HEIGHT);
   Serial.println("");
   Serial.println("WiFi connected");
   tft.println("");
@@ -382,15 +382,33 @@ void initialiseWifi() {
   }
 //No WiFi print text to screen
 void noWiFi(){
+  tft.drawRGBBitmap(170, 190, wifiOff, WIFIOFF_WIDTH, WIFIOFF_HEIGHT);
   tft.fillScreen(ILI9341_BLACK);
   tft.setCursor(10, 10);
   tft.setTextColor(ILI9341_WHITE);
   tft.println("WiFi not configured...");
   tft.setCursor(10, 35);
   tft.println("Skipping!");
-  delay(2000);
+  delay(500);
 }
-
+void checkWifiStatus(){
+  if(WiFi.status() != WL_CONNECTED){
+    tft.drawRGBBitmap(250, 180, wifiOff, WIFIOFF_WIDTH, WIFIOFF_HEIGHT);
+  } else {
+    tft.drawRGBBitmap(250, 180, wifiOn, WIFION_WIDTH, WIFION_HEIGHT);
+  }
+}
+//Diaplay na update time from NTPClient
+void displayTime(){
+  if(millis() - prevMills >= 20000){
+    tft.fillRect(16, 184, 134, 40, ILI9341_DARKGREY);
+    tft.setCursor(15, 220);
+    tft.setTextColor(ILI9341_WHITE);
+    tft.setFont(&VeraSe24pt7b);
+    tft.print(timeClient.getFormattedTime());
+    prevMills = millis();
+  }
+}
 //Functions for button presses
 void setPointUp() {
       setPoint ++ ;  // add one to the setPoint, the setPoint is the ideal temperature for you

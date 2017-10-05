@@ -20,7 +20,7 @@ DallasTemperature sensor library - https://github.com/milesburton/Arduino-Temper
 <li>Resistors - 1 x 4k7, 2x 10k and 2 x 220ohm
 </ul>
 
-<img src='https://sinitronics.uk/wp-content/uploads/2017/09/thermo-1.jpg'>
+<img src='https://sinitronics.uk/wp-content/uploads/2017/10/thermo-2.jpg'>
 
 Will provide full wiring diagram in time.
 
